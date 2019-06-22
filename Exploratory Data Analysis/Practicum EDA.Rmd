@@ -1,0 +1,77 @@
+---
+title: "Practicum EDA"
+author: "Kiran Sundaram"
+date: "3/11/2019"
+output: html_document
+---
+
+```{r, include=FALSE} 
+# load necessary libraries
+library(dplyr)
+library(tidyverse)
+library(ggplot2)
+library(ggfortify)
+library(caret)
+library(cluster)
+library(pROC)
+```
+
+```{r}
+# open data frame
+BFD <-  read.csv(file="Bellevue_final_data.csv", header=TRUE, sep=",")
+```
+
+```{r}
+View(BFD)
+```
+
+```{r}
+# PTSD ground truth + mean fundamental frequency
+boxplot(BFD$AUD_FF_MEAN ~ BFD$pcl_1m_cutoff, col = "#008081")
+# PTSD ground truth + mean intensity 
+boxplot(BFD$AUD_INTENSITY_MEAN ~ BFD$pcl_1m_cutoff, col = "#F88379")
+# PTSD ground truth + mean HNR
+boxplot(BFD$AUD_HNR_MEAN ~ BFD$pcl_1m_cutoff, col = "#900C3F")
+# PTSD ground truth + mean GNE
+boxplot(BFD$AUD_GNE_MEAN ~ BFD$pcl_1m_cutoff, col = "#FFFACD")
+```
+
+```{r}
+# histogram of mean fundamental frequency
+ggplot(BFD, aes(x = AUD_FF_MEAN)) +
+  geom_histogram(fill = "#008081", color = "gray", bins = 15) +
+  theme_minimal()
+
+# histogram of mean intensity 
+ggplot(BFD, aes(x = AUD_INTENSITY_MEAN)) +
+  geom_histogram(fill = "#F88379", color = "gray", bins = 15) +
+  theme_minimal()
+
+# histogram of mean HNR
+ggplot(BFD, aes(x = AUD_HNR_MEAN)) +
+  geom_histogram(fill = "#900C3F", color = "gray", bins = 15) +
+  theme_minimal()
+
+# histogram of mean GNE
+ggplot(BFD, aes(x = AUD_GNE_MEAN)) +
+  geom_histogram(fill = "#FFFACD", color = "gray", bins = 15) +
+  theme_minimal()
+```
+
+```{r}
+sum(is.na(BFD$AUD_FF_MEAN))
+sum(is.na(BFD$AUD_INTENSITY_MEAN))
+sum(is.na(BFD$AUD_HNR_MEAN))
+sum(is.na(BFD$AUD_GNE_MEAN))
+sum(is.na(BFD$pcl_1m_cutoff))
+```
+
+```{r}
+BFD <- BFD[!is.na(BFD$pcl_1m_cutoff), ]
+```
+
+```{r}
+sum(is.na(BFD$pcl_1m_cutoff))
+```
+
+

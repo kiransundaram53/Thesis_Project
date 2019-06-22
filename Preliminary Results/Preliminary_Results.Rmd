@@ -1,0 +1,227 @@
+---
+title: "Preliminary Results"
+author: "Kiran Sundaram"
+date: "4/1/2019"
+output: html_document
+---
+
+```{r, include=FALSE} 
+# load necessary libraries
+library(dplyr)
+library(tidyverse)
+library(ggplot2)
+library(ggfortify)
+library(caret)
+library(cluster)
+library(pROC)
+library(grid)
+library(gridExtra)
+library(InformationValue)
+```
+
+### Tidying Data
+```{r}
+# read in full data frame
+BFD <- read.csv(file="Bellevue_final_data.csv", header=TRUE, sep=",")
+```
+
+```{r}
+# remove unecessary channel columns
+# keep demographic variables
+# keep psych diagnosis variables
+# keep audio variables
+audio <-  BFD %>%
+      select('study_id','pcl_1m_cutoff','Sex','SelfReport_Age','Hispanic','Race','suds_1m','asd_1m','cds_1m',
+             'cesd_1m','k6_1m','lss_1m','pact_forwardfocusraw_1m','pact_traumafocusraw_1m','pact_flex1raw_1m',
+             'pact_flex2raw_1m','panas_positive','panas_negativepcl5_1m','scl_total_1m_23','scl_anx_1m_23',
+             'scl_dep_1m','scl_phob_1m','scl_som_1m','scl_total_1m','scl_anx_1m','psqi_global_1m',
+             'TOT_FRAME','AUD_INTENSITY_FRAMES','AUD_INTENSITY_MEAN','AUD_INTENSITY_MIN','AUD_INTENSITY_MAX',
+             'AUD_FF_FRAMES','AUD_FF_MEAN','AUD_FF_MIN','AUD_FF_MAX','AUD_HNR_FRAMES','AUD_HNR_MEAN',
+             'AUD_HNR_MIN','AUD_HNR_MAX','AUD_GNE_FRAMES','AUD_GNE_MEAN','AUD_GNE_MIN','AUD_GNE_MAX',
+             'VOICE_FRAME_COUNT','VFS_TOTAL_COUNT','VFS_PERCT')
+```
+
+```{r}
+# elected to remove the 5 NA PTSD patients
+audio <- audio[!is.na(audio$pcl_1m_cutoff), ]
+audio$pcl_1m_cutoff <- as.factor(audio$pcl_1m_cutoff)
+as.tibble(audio)
+```
+
+### Exploratory Data Analysis
+```{r}
+# mean fundamental frequency boxplot
+bp1 <- ggplot(audio, aes(x=pcl_1m_cutoff, y=AUD_FF_MEAN, fill = pcl_1m_cutoff)) + 
+  geom_boxplot() +
+  labs(title ="PTSD vs Mean Fundamental Frequency", x = "PTSD", y = "Mean FF") +
+  guides(fill=guide_legend(title="PTSD")) +
+  theme(plot.title = element_text(hjust = 0.5, size = 9), axis.title.x = element_text(size = 7), axis.title.y = element_text(size = 7), legend.title = element_text(size = 7)) +
+  scale_fill_brewer(palette = 'Pastel1')
+```
+
+```{r}
+# mean intensity boxplot
+bp2 <- ggplot(audio, aes(x=pcl_1m_cutoff, y=AUD_INTENSITY_MEAN, fill = pcl_1m_cutoff)) + 
+  geom_boxplot() +
+  labs(title ="PTSD vs Mean Intensity", x = "PTSD", y = "Mean Intensity") +
+  guides(fill=guide_legend(title="PTSD")) +
+  theme(plot.title = element_text(hjust = 0.5, size = 9), axis.title.x = element_text(size = 7), axis.title.y = element_text(size = 7), legend.title = element_text(size = 7)) +
+  scale_fill_brewer(palette = 'Pastel1')
+```
+
+```{r}
+# mean HNR boxplot
+bp3 <- ggplot(audio, aes(x=pcl_1m_cutoff, y=AUD_HNR_MEAN, fill = pcl_1m_cutoff)) + 
+  geom_boxplot() +
+  labs(title ="PTSD vs Mean Harmonics to Noise Ratio", x = "PTSD", y = "Mean HNR") +
+  guides(fill=guide_legend(title="PTSD")) +
+  theme(plot.title = element_text(hjust = 0.5, size = 9), axis.title.x = element_text(size = 7), axis.title.y = element_text(size = 7), legend.title = element_text(size = 7)) +
+  scale_fill_brewer(palette = 'Pastel1')
+```
+
+```{r}
+# mean GNE boxplot
+bp4 <- ggplot(audio, aes(x=pcl_1m_cutoff, y=AUD_GNE_MEAN, fill = pcl_1m_cutoff)) + 
+  geom_boxplot() +
+  labs(title ="PTSD vs Mean Glottal to Noise Energy", x = "PTSD", y = "Mean GNE") +
+  guides(fill=guide_legend(title="PTSD")) +
+  theme(plot.title = element_text(hjust = 0.5, size = 9), axis.title.x = element_text(size = 7), axis.title.y = element_text(size = 7), legend.title = element_text(size = 7)) +
+  scale_fill_brewer(palette = 'Pastel1')
+```
+
+```{r}
+# plot audio features graphs on one graph
+grid.arrange(bp1, bp2, bp3, bp4, nrow = 2, top = 'Comparing PTSD Presence to Audio Features')
+```
+
+```{r}
+# age boxplot
+bp5 <- ggplot(audio, aes(x=pcl_1m_cutoff, y=SelfReport_Age, fill = pcl_1m_cutoff)) + 
+  geom_boxplot() +
+  labs(title ="PTSD vs Age", x = "PTSD", y = "Age") +
+  guides(fill=guide_legend(title="PTSD")) +
+  theme(plot.title = element_text(hjust = 0.5, size = 9), axis.title.x = element_text(size = 7), axis.title.y = element_text(size = 7), legend.title = element_text(size = 7)) +
+  scale_fill_brewer(palette = 'Pastel1')
+```
+
+```{r}
+# create df for a clustered Sex bar graph
+df_bp6 <- audio %>%
+  filter(Sex %in% c("0", "1")) %>%
+  group_by(pcl_1m_cutoff, Sex) %>%
+  summarise(counts = n()) 
+# rename sex column
+df_bp6$Sex <- ifelse(df_bp6$Sex == '0', 'Female', 
+                     ifelse(df_bp6$Sex == '1', 'Male', NA))
+# change sex column to a factor
+df_bp6$Sex <- as.factor(df_bp6$Sex)
+head(df_bp6, 4)
+```
+
+```{r}
+# sex boxplot
+bp6 <- ggplot(df_bp6, aes(x=pcl_1m_cutoff, y = counts)) + 
+  geom_bar(aes(fill = Sex), 
+           stat = "identity", position = position_dodge(0.7), width = 0.7) +
+  labs(title ="PTSD vs Sex", x = "PTSD", y = "Counts") +
+  guides(fill=guide_legend(title="Gender")) +
+  theme(plot.title = element_text(hjust = 0.5, size = 9), axis.title.x = element_text(size = 7), axis.title.y = element_text(size = 7), legend.title = element_text(size = 7)) +
+  scale_fill_brewer(palette = 'Pastel1')
+```
+
+```{r}
+# plot demographic features graphs on one graph
+grid.arrange(bp5, bp6, nrow = 1, top = 'Comparing PTSD Presence to Demographic Features')
+```
+
+### PTSD Model Preparation
+```{r}
+# remove other psych diagnoses
+audio_ptsd <- dplyr::select(audio, -study_id,
+                            -Race,
+                            -suds_1m,
+                            -asd_1m, 
+                            -cds_1m,
+                            -cesd_1m,
+                            -k6_1m,
+                            -lss_1m,
+                            -pact_forwardfocusraw_1m,
+                            -pact_traumafocusraw_1m,
+                            -pact_flex1raw_1m,
+                            -pact_flex2raw_1m,
+                            -panas_positive,
+                            -panas_negativepcl5_1m,
+                            -scl_total_1m_23,
+                            -scl_anx_1m_23,
+                            -scl_dep_1m,
+                            -scl_phob_1m,
+                            -scl_som_1m,
+                            -scl_total_1m,
+                            -scl_anx_1m,
+                            -psqi_global_1m)
+```
+
+```{r}
+# split into training and testing
+train_size <- floor(0.6 * nrow(audio_ptsd))
+
+# set seed
+set.seed(12345)
+train_pos <- sample(seq_len(nrow(audio_ptsd)), size = train_size)
+
+# split
+train_classification <- audio_ptsd[train_pos, ]
+test_classification <- audio_ptsd[-train_pos, ]
+
+dim(train_classification)
+dim(test_classification)
+```
+
+### Logistic Regression
+```{r}
+# basic logistic regression
+ptsd_lr <- glm(pcl_1m_cutoff ~ ., data = train_classification, family = binomial)
+```
+
+```{r}
+predicted_ptsd_lr <- predict(ptsd_lr, test_classification, type="response")
+```
+
+```{r}
+# determine optimal prediction probability cutoff
+optCutOff <- optimalCutoff(test_classification$pcl_1m_cutoff, predicted_ptsd_lr)[1] 
+optCutOff
+```
+
+```{r}
+# misclassification error
+misClassError(test_classification$pcl_1m_cutoff, predicted_ptsd_lr, threshold = optCutOff)
+```
+
+```{r}
+# plot ROC
+plotROC(test_classification$pcl_1m_cutoff, predicted_ptsd_lr)
+```
+
+```{r}
+# concordance index
+Concordance(test_classification$pcl_1m_cutoff, predicted_ptsd_lr)
+```
+
+```{r}
+# sensitvity
+sensitivity(test_classification$pcl_1m_cutoff, predicted_ptsd_lr, threshold = optCutOff)
+
+# specificity
+specificity(test_classification$pcl_1m_cutoff, predicted_ptsd_lr, threshold = optCutOff)
+```
+
+```{r}
+# confusion matrix
+confusionMatrix(test_classification$pcl_1m_cutoff, predicted_ptsd_lr, threshold = optCutOff)
+```
+```{r}
+# normalize based on gender
+```
+
+

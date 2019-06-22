@@ -1,0 +1,40 @@
+---
+title: "Train and Test Set"
+author: "Emily Dube"
+date: "5/26/2019"
+output: html_document
+---
+
+```{r}
+library(tidyverse)
+library(dplyr)
+```
+
+# __Load Datasets__
+```{r}
+df <- read.csv("Bellevue_final_data.csv") #path to your dataset
+train <- read.csv("ptsd_train.csv") #trainset I sent you
+test <- read.csv("ptsd_test.csv") #testset I sent you
+```
+
+# __Filter your dataset based on study_id to be included in train & test__
+```{r}
+my_trainset <- subset(df, study_id %in% train$study_id)
+my_testset <- subset(df, study_id %in% test$study_id)
+```
+
+# __REMOVE THE FOLLOWING COLUMNS__
+```{r}
+# c("Hispanic", "Race", "Label", "suds_1m", "asd_1m", "cds_1m", "cesd_1m", "k6_1m", "lss_1m", "pact_forwardfocusraw_1m", "pact_traumafocusraw_1m", "pact_flex1raw_1m", "pact_flex2raw_1m", "panas_positive", "panas_negativepcl5_1m", "scl_total_1m_23", "scl_anx_1m_23", "scl_dep_1m", "scl_phob_1m",  "scl_som_1m", "scl_total_1m", "scl_anx_1m", "psqi_global_1m")
+
+my_trainset <- my_trainset[,-c(5:7,9:10, 12:20, 22, 24, 28:71, 88:95, 102)]
+my_testset <- my_testset[,-c(5:7,9:10, 12:20, 22, 24, 28:71, 88:95, 102)]
+```
+
+# __Write to csv__
+```{r}
+write.csv(my_trainset, "mytrain.csv", row.names = FALSE)
+write.csv(my_testset, "mytest.csv", row.names = FALSE)
+```
+
+

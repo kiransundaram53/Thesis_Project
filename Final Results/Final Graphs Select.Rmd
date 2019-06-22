@@ -1,0 +1,137 @@
+---
+title: "Final Graphs Select"
+author: "Kiran Sundaram"
+date: "6/8/2019"
+output: html_document
+---
+
+```{r, include=FALSE} 
+# load necessary libraries
+library(dplyr)
+library(tidyverse)
+library(broom)
+library(ggplot2)
+library(ggfortify)
+library(caret)
+library(cluster)
+library(pROC)
+library(grid)
+library(gridExtra)
+library(Hmisc)
+library(psych)
+library(car)
+library(randomForest)
+library(tree)
+library(gbm)
+library(ROCR)
+library(survival)
+library(PresenceAbsence)
+library(class)
+```
+
+## Read In Data
+```{r}
+# read in previously cleaned train and test data frame
+mytrain <- read.csv(file="mytrain.csv", header=TRUE, sep=",")
+mytest <- read.csv(file="mytest.csv", header=TRUE, sep=",")
+```
+
+```{r}
+# feature selected variables and two demographic variables
+train_select <- subset(mytrain, select=c(pcl_1m_cutoff, WORD_REP_SCORE.PRECENTAGE., AUD_FF_MEAN, ROS_SCORE.PER_SEC., AUD_GNE_MEAN, AUD_HNR_MEAN, AUD_INTENSITY_MEAN))
+
+test_select <- subset(mytest, select=c(pcl_1m_cutoff, WORD_REP_SCORE.PRECENTAGE., AUD_FF_MEAN, ROS_SCORE.PER_SEC., AUD_GNE_MEAN, AUD_HNR_MEAN, AUD_INTENSITY_MEAN))
+
+
+as.tibble(train_select)
+as.tibble(test_select)
+```
+
+### PTSD Logistic Regression
+```{r}
+glmModel <- glm(pcl_1m_cutoff ~ ., data=train_select, family=binomial())
+```
+
+```{r}
+pred.glmModel <- predict(glmModel, newdata=test_select, type="response")
+pr <- prediction(pred.glmModel, test_select$pcl_1m_cutoff)
+perf<- performance(pr, measure = "tpr", x.measure = "fpr")
+```
+
+
+```{r}
+lr_plot <- roc(test_select$pcl_1m_cutoff, pred.glmModel, smooth = TRUE)
+lr_plot
+```
+
+### SVM Radial
+```{r RFE Radial SVM Model}
+ctrl <- trainControl(method = "repeatedcv", repeats = 5,classProbs = T, savePredictions = T)
+svm_rad <- train(pcl_1m_cutoff ~ ., data = train_select, method = "svmRadial", tuneLength = 10, trControl = ctrl)
+svmr_test <- predict(svm_rad, newdata = test_select)
+```
+
+```{r}
+svm_rad <- roc(test_select$pcl_1m_cutoff, svmr_test, smooth = TRUE)
+svm_rad
+```
+```{r}
+f1()
+```
+
+
+```{r RFE Linear SVM Model}
+ctrl <- trainControl(method = "repeatedcv", repeats = 5,classProbs = T, savePredictions = T)
+svm <- train(pcl_1m_cutoff ~., data = train_select, method = "svmLinear", tuneLength = 10, trControl = ctrl)
+
+svm_test <- predict(svm, newdata = test_select)
+
+```
+
+```{r}
+svm <- roc(test_select$pcl_1m_cutoff, svm_test, smooth = TRUE)
+svm
+```
+
+```{r RFE Random Forest Model}
+ctrl <- trainControl(method = "cv", number = 15)
+
+RF_classification <- randomForest(pcl_1m_cutoff ~ ., data=train_select,  importance = TRUE, oob.times = 15, confusion = TRUE, trControl = ctrl)
+
+test_RF_classification <- predict(RF_classification , newdata = test_select)
+```
+```{r}
+rf <- roc(test_select$pcl_1m_cutoff, test_RF_classification, smooth = TRUE)
+rf
+```
+```{r}
+mean(rf$specificities)
+mean(rf$sensitivities)
+```
+
+
+```{r}
+prc_train_labels <- train_select[,1]
+as.tibble(prc_train_labels)
+prc_test_pred <- knn(train = train_select, test = test_select ,cl = prc_train_labels, k=10)
+prc_test_pred <- as.numeric(prc_test_pred)
+```
+
+```{r}
+knn <- roc(test_select$pcl_1m_cutoff, prc_test_pred)
+knn
+```
+
+
+# All ROC plot
+```{r}
+#ALL Variables
+
+# For the plot -- for each model make a "roc object" with roc() if you get the error "Not smoothable" change smooth = TRUE to smooth.n = TRUE. It wasn't letting me add the AUC variables to the legend so I wrote them down and manually put them into the legend (see below)
+
+plot(lr_plot, asp = NA, legacy.axes = TRUE, grid=TRUE, col = "dodgerblue", main = "ROC for PTSD Prediction: Select Acoustic Features", ylab = "Sensitivity", xlab = "Specificity")
+plot(svm, add=TRUE, col = "darkorchid")
+plot(svm_rad,  add=TRUE, col = "firebrick")
+plot(knn, add=TRUE, col = "forestgreen")
+legend("bottomright", legend=c("Logistic Regression; AUC = 0.566","Linear SVM; AUC = 0.591", "Radial SVM; AUC = 0.677", "KNN; AUC = 0.580 "), col=c("dodgerblue", "darkorchid", "firebrick", "forestgreen"), lwd=2, cex=0.8)
+```

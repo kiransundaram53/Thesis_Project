@@ -1,0 +1,677 @@
+---
+title: "Final_Results"
+author: "Kiran Sundaram"
+date: "5/29/2019"
+output: html_document
+---
+
+```{r, include=FALSE} 
+# load necessary libraries
+library(dplyr)
+library(tidyverse)
+library(broom)
+library(ggplot2)
+library(ggfortify)
+library(caret)
+library(cluster)
+library(pROC)
+library(grid)
+library(gridExtra)
+library(Hmisc)
+library(psych)
+library(car)
+library(randomForest)
+library(tree)
+library(gbm)
+library(ROCR)
+library(survival)
+library(PresenceAbsence)
+```
+
+## Read In Data
+```{r}
+# read in previously cleaned train and test data frame
+mytrain <- read.csv(file="mytrain.csv", header=TRUE, sep=",")
+mytest <- read.csv(file="mytest.csv", header=TRUE, sep=",")
+```
+
+```{r}
+as.tibble(mytrain)
+as.tibble(mytest)
+```
+
+## Initial Statistical Analysis
+```{r}
+# merge train and test for statistical analysis
+full_dataset <- rbind(mytrain, mytest)
+as.tibble(full_dataset)
+```
+##### Post-Traumatic Stress Disorder
+```{r}
+# multiple t-tests for all relevant columns
+# assume null hypothesis is that there is no difference between PTSD presence and absence
+lapply(full_dataset[,c("Sex", "SelfReport_Age", "AUD_INTENSITY_MEAN", "AUD_FF_MEAN", "AUD_HNR_MEAN", "AUD_GNE_MEAN", "ROS_SCORE.PER_SEC.", "VFS_PERCT")], function(x) t.test(x ~ full_dataset$pcl_1m_cutoff, mu = 0, alt = 'two.sided', conf=0.95, var.eq = F, paired = F))
+```
+
+##### Severe Mental Illness
+```{r}
+# create a cut-off variable for SMI
+# NOTE: there are 3 levels for this category, but for the sake of the t-test I elected to consolidate them into 2 categories
+full_dataset$SMI <- ifelse(full_dataset$k6_1m > 13, 'SMI', 
+                                ifelse(full_dataset$k6_1m <= 13, 'No_SMI', NA))
+```
+
+```{r}
+# multiple t-tests for all relevant columns
+# assume null hypothesis is that there is no difference between SMI presence and absence
+lapply(full_dataset[,c("Sex", "SelfReport_Age", "AUD_INTENSITY_MEAN", "AUD_FF_MEAN", "AUD_HNR_MEAN", "AUD_GNE_MEAN", "ROS_SCORE.PER_SEC.", "VFS_PERCT")], function(x) t.test(x ~ full_dataset$SMI, mu = 0, alt = 'two.sided', conf=0.95, var.eq = F, paired = F))
+```
+
+##### Sleep Quality
+```{r}
+# create a cut-off variable for sleep quality 
+# PSQI greater than or equal to five is considered bad sleep quality
+full_dataset$PSQI <- ifelse(full_dataset$psqi_global_1m >= 5, 'BAD', 
+                                ifelse(full_dataset$psqi_global_1m < 5, 'GOOD', NA))
+```
+
+```{r}
+# multiple t-tests for all relevant columns
+# assume null hypothesis is that there is no difference between PTSD presence and absence
+lapply(full_dataset[,c("Sex", "SelfReport_Age", "AUD_INTENSITY_MEAN", "AUD_FF_MEAN", "AUD_HNR_MEAN", "AUD_GNE_MEAN", "ROS_SCORE.PER_SEC.", "VFS_PERCT")], function(x) t.test(x ~ full_dataset$PSQI, mu = 0, alt = 'two.sided', conf=0.95, var.eq = F, paired = F))
+```
+
+```{r}
+# multiple t-tests for all relevant columns
+# assume null hypothesis is that there is no difference between Sex
+lapply(full_dataset[,c( "AUD_INTENSITY_MEAN", "AUD_FF_MEAN", "AUD_HNR_MEAN", "AUD_GNE_MEAN", "ROS_SCORE.PER_SEC.", "VFS_PERCT")], function(x) t.test(x ~ full_dataset$Sex, mu = 0, alt = 'two.sided', conf=0.95, var.eq = F, paired = F))
+```
+
+## Principal Component Analysis
+##### Post-Traumatic Stress Disorder
+```{r}
+# remove non-numeric columns for PCA
+pca_data <- dplyr::select(full_dataset,
+                            -asd_1m,
+                            -k6_1m, 
+                            -scl_dep_1m,
+                            -scl_som_1m,
+                            -scl_anx_1m,
+                            -psqi_global_1m)
+# rough removal of NA for PCA plot
+# only 9 columns were omitted
+# GOAL: replace missing values with mean values of the columns associated with PTSD presence 
+
+as.tibble(pca_data)
+pca_data <- na.omit(pca_data)
+# run PCA and plot
+autoplot(prcomp(pca_data), data = pca_data, colour = 'pcl_1m_cutoff')
+```
+
+## Recursive Feature Elimination
+```{r}
+# remove other psych diagnoses
+rfe_data <- dplyr::select(full_dataset, -study_id,
+                            -asd_1m,
+                            -k6_1m, 
+                            -scl_dep_1m,
+                            -scl_som_1m,
+                            -scl_anx_1m,
+                            -psqi_global_1m,
+                            -SMI,
+                            -PSQI)
+#rfe_data$pcl_1m_cutoff <- as.factor(rfe_data$pcl_1m_cutoff)
+# takes out two rows
+rfe_data <- na.omit(rfe_data)
+as.tibble(rfe_data)
+```
+
+```{r}
+# set seed
+set.seed(7)
+# define control
+control <- rfeControl(functions=rfFuncs, method="cv", number=10)
+# run RFE algorithm
+rfe_results <- rfe(rfe_data[, 2:26], rfe_data[,1], sizes=c(2:26), rfeControl=control)
+# summarize results
+print(rfe_results)
+# print selected features
+predictors(rfe_results)
+# plot results
+plot(rfe_results, type=c("g", "o"))
+```
+
+## Silhouette Function
+```{r}
+k.max <- 15
+data <- rfe_data
+sil <- rep(0, k.max)
+```
+
+```{r}
+# compute the average silhouette width
+# k = 2 to k = 15
+for(i in 2:k.max){
+  km.res <- kmeans(data, centers = i, nstart = 25)
+  ss <- silhouette(km.res$cluster, dist(data))
+  sil[i] <- mean(ss[, 3])
+}
+```
+
+```{r}
+# plot the  average silhouette width
+# optimal number of clusters is 2
+plot(1:k.max, sil, type = "b", pch = 19, 
+     frame = FALSE, xlab = "Number of clusters k")
+abline(v = which.max(sil), lty = 2)
+```
+
+## K-Means Clustering
+```{r}
+set.seed(876)
+autoplot(kmeans(rfe_data, 2), data = rfe_data)
+```
+
+### PTSD Model Preparation
+```{r}
+# remove other psych diagnoses
+ptsd_train <- dplyr::select(mytrain, -asd_1m,
+                            -k6_1m, 
+                            -scl_dep_1m,
+                            -scl_som_1m,
+                            -scl_anx_1m,
+                            -psqi_global_1m)
+ptsd_test <- dplyr::select(mytest, -asd_1m,
+                            -k6_1m, 
+                            -scl_dep_1m,
+                            -scl_som_1m,
+                            -scl_anx_1m,
+                            -psqi_global_1m)
+```
+
+```{r}
+as.tibble(ptsd_train)
+```
+
+```{r}
+train <- dplyr::select(ptsd_train, -study_id)
+as.tibble(train)
+```
+
+### PTSD Logistic Regression
+```{r}
+# classification problem
+ptsd_train$pcl_1m_cutoff <- as.factor(ptsd_train$pcl_1m_cutoff)
+# correct error "at least one of the class levels is not a valid R variable name"
+ptsd_train$pcl_1m_cutoff <- make.names(ptsd_train$pcl_1m_cutoff)
+
+# create model. logistic regression is a bionomial general linear model
+logistic_regression <- train(pcl_1m_cutoff ~ ., data = ptsd_train, method = "glm", family= "binomial", trControl = ctrl)
+```
+
+```{r}
+logistic_regression
+```
+
+```{r}
+summary(logistic_regression)
+```
+
+```{r}
+lr <- (plot(x = roc(predictor = logistic_regression$pred$X1, response = logistic_regression$pred$obs)$specificities, y = roc(predictor = logistic_regression$pred$X1, response = logistic_regression$pred$obs)$sensitivities, col= "blue", xlim = c(1, 0), type ="l", ylab = "Sensitivity", xlab = "Specificity", main = "Logistic Regression"))
+legend("bottomright", legend = paste("AUC: ", roc(predictor = logistic_regression$pred$X1, response = logistic_regression$pred$obs)$auc
+, sep = ""), col = c("blue"), fill = c("blue"))
+```
+
+### PTSD Logistic Regression with Feature Selected Variables
+```{r}
+# feature selected variables and two demographic variables
+train_select <- subset(train, select=c(pcl_1m_cutoff, Sex, SelfReport_Age, WORD_REP_SCORE.PRECENTAGE., AUD_FF_MEAN, ROS_SCORE.PER_SEC.))
+
+as.tibble(train_select)
+```
+
+```{r}
+# see how variables are related to one another
+# we can see that AUD_FF_MEAN and WORD_REP_SCORE.PERCENTAGE. are the most correlated
+# note that SelfReport_Age and ROS_SCORE.PER_SEC. is skewed
+pairs.panels(train_select, col='red')
+```
+
+```{r}
+# classification problem
+train_select$pcl_1m_cutoff <- as.factor(train_select$pcl_1m_cutoff)
+# correct error "at least one of the class levels is not a valid R variable name"
+train_select$pcl_1m_cutoff <- make.names(train_select$pcl_1m_cutoff)
+
+# create model. logistic regression is a bionomial general linear model
+logistic_regression_select <- train(pcl_1m_cutoff ~ ., data = train_select, method = "glm", family= "binomial", trControl = ctrl)
+```
+
+
+```{r}
+logistic_regression_select
+```
+
+
+```{r}
+summary(logistic_regression_select)
+```
+
+```{r}
+plot(x = roc(predictor = logistic_regression_select$pred$X1, response = logistic_regression_select$pred$obs)$specificities, y = roc(predictor = logistic_regression_select$pred$X1, response = logistic_regression_select$pred$obs)$sensitivities, col= "blue", xlim = c(1, 0), type ="l", ylab = "Sensitivity", xlab = "Specificity", main = "Logistic Regression with Feature Selected Variables")
+legend("bottomright", legend = paste("AUC: ", roc(predictor = logistic_regression_select$pred$X1, response = logistic_regression_select$pred$obs)$auc
+, sep = ""), col = c("blue"), fill = c("blue"))
+```
+
+### PTSD SVM
+#### Linear SVM
+```{r}
+# train linear SVM
+set.seed(30495)
+
+# classification problem
+ptsd_train$pcl_1m_cutoff <- as.factor(ptsd_train$pcl_1m_cutoff)
+# correct error "at least one of the class levels is not a valid R variable name"
+ptsd_train$pcl_1m_cutoff <- make.names(ptsd_train$pcl_1m_cutoff)
+
+ctrl <- trainControl(method = "repeatedcv", repeats = 5,classProbs = T, savePredictions = T)
+svm_linear <- train(pcl_1m_cutoff ~ ., data = ptsd_train, method = "svmLinear", tuneLength = 10, trControl = ctrl, scale = FALSE)
+```
+
+```{r}
+# view linear svm
+svm_linear
+```
+
+```{r}
+plot(x = roc(predictor = svm_linear$pred$X1, response = svm_linear$pred$obs)$specificities, y = roc(predictor = svm_linear$pred$X1, response = svm_linear$pred$obs)$sensitivities, col= "blue", xlim = c(1, 0), type ="l", ylab = "Sensitivity", xlab = "Specificity", main = "Linear SVM")
+legend("bottomright", legend = paste("AUC: ", roc(predictor = svm_linear$pred$X1, response = svm_linear$pred$obs)$auc
+, sep = ""), col = c("blue"), fill = c("blue"))
+```
+
+```{r}
+# predict using test set
+# classification problem
+#ptsd_test$pcl_1m_cutoff <- as.factor(ptsd_test$pcl_1m_cutoff)
+# correct error "at least one of the class levels is not a valid R variable name"
+#ptsd_test$pcl_1m_cutoff <- make.names(ptsd_test$pcl_1m_cutoff)
+
+# accuracy is 
+svm_test <- predict(svm_linear, newdata = ptsd_test)
+
+# confusion matrix
+a <- union(svm_test_select, test_select$pcl_1m_cutoff)
+b <- table(factor(svm_test_select, a), factor(test_select$pcl_1m_cutoff, a))
+confusionMatrix(b)
+```
+
+#### Linear SVM with Feature Selected Variables
+```{r}
+# train linear SVM
+set.seed(30495)
+
+# classification problem
+train_select$pcl_1m_cutoff <- as.factor(train_select$pcl_1m_cutoff)
+# correct error "at least one of the class levels is not a valid R variable name"
+train_select$pcl_1m_cutoff <- make.names(train_select$pcl_1m_cutoff)
+
+ctrl <- trainControl(method = "repeatedcv", repeats = 5,classProbs = T, savePredictions = T)
+svm_linear_select <- train(pcl_1m_cutoff ~ ., data = train_select, method = "svmLinear", tuneLength = 10, trControl = ctrl, scale = FALSE)
+```
+
+```{r}
+# view linear svm
+svm_linear_select
+```
+
+```{r}
+plot(x = roc(predictor = svm_linear_select$pred$X1, response = svm_linear_select$pred$obs)$specificities, y = roc(predictor = svm_linear_select$pred$X1, response = svm_linear_select$pred$obs)$sensitivities, col= "blue", xlim = c(1, 0), type ="l", ylab = "Sensitivity", xlab = "Specificity", main = "Linear SVM with Feature Selected Variables")
+legend("bottomright", legend = paste("AUC: ", roc(predictor = svm_linear_select$pred$X1, response = svm_linear_select$pred$obs)$auc
+, sep = ""), col = c("blue"), fill = c("blue"))
+```
+
+```{r}
+# predict using test set
+# classification problem
+test_select$pcl_1m_cutoff <- as.factor(test_select$pcl_1m_cutoff)
+# correct error "at least one of the class levels is not a valid R variable name"
+test_select$pcl_1m_cutoff <- make.names(test_select$pcl_1m_cutoff)
+
+# accuracy is 
+svm_test_select <- predict(svm_linear_select, newdata = test_select)
+
+# confusion matrix
+a <- union(svm_test_select, test_select$pcl_1m_cutoff)
+b <- table(factor(svm_test_select, a), factor(test_select$pcl_1m_cutoff, a))
+confusionMatrix(b)
+```
+
+#### Radial SVM
+```{r}
+# train radial SVM
+set.seed(30495)
+
+# classification problem
+ptsd_train$pcl_1m_cutoff <- as.factor(ptsd_train$pcl_1m_cutoff)
+# correct error "at least one of the class levels is not a valid R variable name"
+ptsd_train$pcl_1m_cutoff <- make.names(ptsd_train$pcl_1m_cutoff)
+
+ctrl <- trainControl(method = "repeatedcv", repeats = 5,classProbs = T, savePredictions = T)
+svm_rad <- train(pcl_1m_cutoff ~ ., data = ptsd_train, method = "svmRadial", tuneLength = 10, trControl = ctrl, scale = FALSE)
+```
+
+```{r}
+svm_rad
+```
+
+```{r}
+plot(x = roc(predictor = svm_rad$pred$X1, response = svm_rad$pred$obs)$specificities, y = roc(predictor = svm_rad$pred$X1, response = svm_rad$pred$obs)$sensitivities, col= "blue", xlim = c(1, 0), type ="l", ylab = "Sensitivity", xlab = "Specificity", main = "Radial SVM")
+legend("bottomright", legend = paste("AUC: ", roc(predictor = svm_rad$pred$X1, response = svm_rad$pred$obs)$auc
+, sep = ""), col = c("blue"), fill = c("blue"))
+```
+
+```{r}
+# classification problem
+ptsd_test$pcl_1m_cutoff <- as.factor(ptsd_test$pcl_1m_cutoff)
+# correct error "at least one of the class levels is not a valid R variable name"
+ptsd_test$pcl_1m_cutoff <- make.names(ptsd_test$pcl_1m_cutoff)
+
+# accuracy is ~ 65%
+svm_test_rad <- predict(svm_rad, newdata = ptsd_test)
+
+# confusion matrix
+a <- union(svm_test_rad, ptsd_test$pcl_1m_cutoff)
+b <- table(factor(svm_test_rad, a), factor(ptsd_test$pcl_1m_cutoff, a))
+confusionMatrix(b)
+```
+
+#### Radial SVM with Feature Selected Variables
+```{r}
+# train radial SVM
+set.seed(30495)
+
+# classification problem
+train_select$pcl_1m_cutoff <- as.factor(train_select$pcl_1m_cutoff)
+# correct error "at least one of the class levels is not a valid R variable name"
+train_select$pcl_1m_cutoff <- make.names(train_select$pcl_1m_cutoff)
+
+ctrl <- trainControl(method = "repeatedcv", repeats = 5,classProbs = T, savePredictions = T)
+svm_rad_select <- train(pcl_1m_cutoff ~ ., data = train_select, method = "svmRadial", tuneLength = 10, trControl = ctrl)
+```
+
+```{r}
+# view radial SVM
+svm_rad_select
+```
+
+```{r}
+plot(x = roc(predictor = svm_rad_select$pred$X1, response = svm_rad_select$pred$obs)$specificities, y = roc(predictor = svm_rad_select$pred$X1, response = svm_rad_select$pred$obs)$sensitivities, col= "blue", xlim = c(1, 0), type ="l", ylab = "Sensitivity", xlab = "Specificity", main = "Radial SVM with Feature Selected Variables")
+legend("bottomright", legend = paste("AUC: ", roc(predictor = svm_rad_select$pred$X1, response = svm_rad_select$pred$obs)$auc
+, sep = ""), col = c("blue"), fill = c("blue"))
+```
+
+```{r}
+# classification problem
+test_select$pcl_1m_cutoff <- as.factor(test_select$pcl_1m_cutoff)
+# correct error "at least one of the class levels is not a valid R variable name"
+test_select$pcl_1m_cutoff <- make.names(test_select$pcl_1m_cutoff)
+
+# accuracy is ~ 65%
+svm_test_rad_select <- predict(svm_rad_select, newdata = test_select)
+
+# confusion matrix
+a <- union(svm_test_rad_select, test_select$pcl_1m_cutoff)
+b <- table(factor(svm_test_rad_select, a), factor(test_select$pcl_1m_cutoff, a))
+confusionMatrix(b)
+```
+
+#### Random Forest
+```{r}
+set.seed(30495)
+RF_classification <- randomForest(pcl_1m_cutoff ~ ., data=ptsd_train,  importance = TRUE, oob.times = 15, confusion = TRUE)
+```
+
+```{r}
+RF_classification
+```
+
+```{r}
+# visualize importance of features
+importance(RF_classification)
+```
+
+```{r}
+# predict using test set
+test_RF_classification <- predict (RF_classification , newdata = ptsd_test)
+
+# confusion matrix
+x <- union(test_RF_classification, ptsd_test$pcl_1m_cutoff)
+y <- table(factor(test_RF_classification, x), factor(ptsd_test$pcl_1m_cutoff, x))
+confusionMatrix(y)
+```
+
+```{r}
+
+```
+
+#### Naive Bayes
+```{r }
+# train model on naive bayes
+ctrl_nb <- trainControl(method = "repeatedcv", repeats = 15,classProbs = T, savePredictions = T)
+
+naive_bayes <- train(pcl_1m_cutoff ~ ., data = ptsd_train, method = "naive_bayes", trControl = ctrl)
+```
+
+```{r}
+# summarize naive bayes
+naive_bayes
+summary(naive_bayes)
+```
+
+```{r}
+# visualize ROC curve
+plot(x = roc(predictor = naive_bayes$pred$X1, response = naive_bayes$pred$obs)$specificities, y = roc(predictor = naive_bayes$pred$X1, response = naive_bayes$pred$obs)$sensitivities, col= "blue", xlim = c(1, 0), type ="l", main = "Naive Bayes", ylab = "Sensitivity", xlab = "Specificity")
+# AUC is 0.5831
+legend("bottomright", legend = paste("AUC: ", roc(predictor = naive_bayes$pred$X1, response = naive_bayes$pred$obs)$auc, sep = ""), col = c("blue"), fill = c("blue"))
+```
+
+```{r}
+# test independent set
+naive_bayes_pred <- predict(naive_bayes, newdata=ptsd_test)
+# confusion matrix
+cm_nb <- table(pred = naive_bayes_pred, true = ptsd_test$pcl_1m_cutoff)
+cm_nb
+```
+
+```{r}
+# pcc results
+pcc(cm_nb, st.dev=TRUE)
+```
+
+
+
+#### Naive Bayes with Feature Selected Variables
+```{r }
+# train model on naive bayes
+ctrl_nb <- trainControl(method = "repeatedcv", repeats = 15,classProbs = T, savePredictions = T)
+
+naive_bayes_select <- train(pcl_1m_cutoff ~ ., data = train_select, method = "naive_bayes", trControl = ctrl)
+```
+
+```{r}
+# summarize naive bayes
+naive_bayes_select
+summary(naive_bayes_select)
+```
+
+```{r}
+# visualize ROC curve
+plot(x = roc(predictor = naive_bayes_select$pred$X1, response = naive_bayes_select$pred$obs)$specificities, y = roc(predictor = naive_bayes_select$pred$X1, response = naive_bayes_select$pred$obs)$sensitivities, col= "blue", xlim = c(1, 0), type ="l", main = "Naive Bayes with Feature Selected Variables", ylab = "Sensitivity", xlab = "Specificity")
+# AUC is 0.5831
+legend("bottomright", legend = paste("AUC: ", roc(predictor = naive_bayes_select$pred$X1, response = naive_bayes_select$pred$obs)$auc, sep = ""), col = c("blue"), fill = c("blue"))
+```
+
+```{r}
+# test independent set
+naive_bayes_pred_select <- predict(naive_bayes_select, newdata=test_select)
+# confusion matrix
+cm_nb_select <- table(pred = naive_bayes_pred_select, true = test_select$pcl_1m_cutoff)
+cm_nb_select
+```
+
+```{r}
+# pcc results
+pcc(cm_nb_select, st.dev=TRUE)
+```
+
+##### Lasso Regression
+```{r}
+# convert training data to matrix format
+x <- model.matrix(pcl_1m_cutoff ~., ptsd_train)
+
+y <- ptsd_train$pcl_1m_cutoff
+# perform grid search to find optimal value of lambda
+cv.out <- cv.glmnet(x, y, alpha = 1, family="binomial", type.measure = "mse" )
+# plot result
+plot(cv.out)
+# min value of lambda
+lambda_min <- cv.out$lambda.min
+# best value of lambda
+lambda_1se <- cv.out$lambda.1se
+# regression coefficients
+coef(cv.out,s=lambda_1se)
+```
+
+```{r}
+# get test data
+x_test <- model.matrix(pcl_1m_cutoff ~., ptsd_test)
+# predict class, type=”class”
+lasso_prob <- predict(cv.out, newx = x_test, s=lambda_1se, type="response")
+lasso_prob
+# translate probabilities to predictions
+lasso_predict <- rep("0", nrow(ptsd_test))
+lasso_predict[lasso_prob>.5] <- "1"
+lasso_predict <- as.integer(lasso_predict)
+lasso_predict
+```
+
+```{r}
+# confusion matrix
+u <- union(lasso_predict, ptsd_test$pcl_1m_cutoff)
+t <- table(factor(lasso_predict, u), factor(ptsd_test$pcl_1m_cutoff, u))
+cm_lasso <- confusionMatrix(t)
+cm_lasso
+```
+
+
+# Libraries
+```{r message= FALSE, warning=FALSE}
+# install.packages("randomForest")
+library(caret)
+library(mlbench)
+library(pROC)
+library(ROCR)
+library(randomForest)
+library(tidyverse)
+library(e1071)
+# (.packages())
+```
+
+# GLM for All Variables
+```{r}
+set.seed(123)
+glmModel <- glm(pcl_1m_cutoff ~ . , data=ptsd_train, family=binomial())
+pred.glmModel <- predict(glmModel, newdata=ptsd_test, type="response")
+```
+
+# GLM All - ROC (FOR PLOT)
+```{r}
+roc.glmModel <- pROC::roc(ptsd_test$pcl_1m_cutoff, pred.glmModel, auc = TRUE)
+```
+
+# GLM-2 ANOVA (FEATURE SELECTION)
+## Anova
+```{r}
+anova(glmModel, test = 'Chisq')
+```
+
+## Model 2 - SELECTED ANOVA VARIABLES ONLY
+```{r}
+#SELECT IMPORTANT FEATURES FROM ANOVA (STARRED VARIABLES)
+glmModel2 <- glm(pcl_1m_cutoff ~ AUD_INTENSITY_MIN + VFS_PERCT + AUD_GNE_MAX + AUD_FF_MEAN, data=ptsd_train, family=binomial())
+summary(glmModel2)
+```
+
+## Compare Anova
+```{r message = FALSE, warning= FALSE}
+anova(glmModel, glmModel2, test = "Chisq")
+```
+
+##Model 2 Pred
+```{r}
+pred.glmModel2 <- predict(glmModel2, newdata=ptsd_test, type="response")
+pr <- prediction(pred.glmModel2, ptsd_test$pcl_1m_cutoff)
+perf<- performance(pr, measure = "tpr", x.measure = "fpr")
+plot(perf)
+auc(ptsd_test$pcl_1m_cutoff, pred.glmModel2)
+```
+
+# ANOVA GLM ROC
+```{r}
+roc.glmModel2 <- pROC::roc(ptsd_test$pcl_1m_cutoff, pred.glmModel2, auc = TRUE, smooth = TRUE)
+```
+
+
+# All ROC plot
+```{r}
+#ALL Variables
+
+# For the plot -- for each model make a "roc object" with roc() if you get the error "Not smoothable" change smooth = TRUE to smooth.n = TRUE. It wasn't letting me add the AUC variables to the legend so I wrote them down and manually put them into the legend (see below)
+
+plot(rf.all, asp = NA, legacy.axes = TRUE, grid=TRUE, col = "gold", main = "ROC for PTSD Prediction: All Acoustic Variables", ylab = "Sensitivity", xlab = "Specificity")
+plot(roc.glmModel, add=TRUE, col = "dodgerblue")
+plot(nb_all_roc,  add=TRUE, col = "firebrick")
+plot(svmrad_all_roc, add=TRUE, col = "darkorchid")
+plot(svmlin_all_roc, add=TRUE, col = "forestgreen")
+legend("bottomright", legend=c("Random Forest; AUC = 0.573", "Logistic Regression; AUC = 0.556", "Naive Bayes; AUC = 0.472", "Radial SVM; AUC = 0.500", "Linear SVM; AUC = 0.500"), col=c("gold", "dodgerblue", "firebrick", "darkorchid", "forestgreen"), lwd=2, cex=0.8)
+```
+
+# Selected ROC Plot
+```{r}
+plot(rf, asp = NA, legacy.axes = TRUE, grid=TRUE, col = "gold", main = "ROC for PTSD Prediction: Selected Speech Content Variables", ylab = "Sensitivity", xlab = "Specificity")
+plot(roc.glmModel2, add=TRUE, col = "dodgerblue")
+plot(nb_rfe_roc,  add=TRUE, col = "firebrick")
+plot(svmrad_sel_roc, add=TRUE, col = "darkorchid")
+plot(svmlin_sel_roc, add=TRUE, col = "forestgreen")
+legend("bottomright", legend=c("Random Forest; AUC = 0.557", "Logistic Regression; AUC = 0.670 *", "Naive Bayes; AUC = 0.472", "Radial SVM; AUC = 0.528 *", "Linear SVM; AUC = 0.500"), col=c("gold", "dodgerblue", "firebrick", "darkorchid", "forestgreen"), lwd=2, cex=0.8)
+```
+
+
+```{r}
+library(corrplot)
+```
+
+```{r}
+pca_data <- dplyr::select(pca_data, -study_id,
+                          -Sex,
+                          -SelfReport_Age,
+                          -TOT_FRAME,
+                          -AUD_INTENSITY_FRAMES,
+                          -AUD_FF_FRAMES,
+                          -AUD_GNE_FRAMES,
+                          -AUD_HNR_FRAMES,
+                          -AUD_INTENSITY_MIN,
+                          -AUD_GNE_MIN,
+                          -AUD_HNR_MIN,
+                          -AUD_FF_MIN,
+                          -TOTAL_NO_WORDS,
+                          -VFS_TOTAL_COUNT)
+
+M<-cor(pca_data)
+head(round(M,2))
+```
+```{r}
+corrplot(M, method="circle", tl.col="black", tl.srt=45, tl.cex = .6)
+```
+

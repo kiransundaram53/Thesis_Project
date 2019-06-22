@@ -1,0 +1,313 @@
+---
+title: "Merged Analysis"
+author: "Kiran Sundaram"
+date: "6/3/2019"
+output: html_document
+---
+```{r, include=FALSE} 
+# load necessary libraries
+library(dplyr)
+library(tidyverse)
+library(broom)
+library(ggplot2)
+library(ggfortify)
+library(caret)
+library(cluster)
+library(pROC)
+library(grid)
+library(gridExtra)
+library(Hmisc)
+library(psych)
+library(car)
+library(randomForest)
+library(tree)
+library(gbm)
+library(ROCR)
+```
+
+## Read In Data
+```{r}
+# read in dataframe
+merge <- read.csv(file="merged_df.csv", header=TRUE, sep=",")
+```
+
+## Recursive Feature Elimination
+```{r}
+# scale feature data
+scaled.merge <- scale(merge[3:181])
+
+# bind PTSD with scaled data
+merged <- cbind(merge[2], scaled.merge)
+merged <- dplyr::select(merged, -AUD_GNE_FRAMES,
+                        -AUD_GNE_MIN)
+as.tibble(merged)
+```
+
+
+```{r}
+# set seed
+#set.seed(7)
+# define control
+#control <- rfeControl(functions=rfFuncs, method="cv", number=10)
+# run RFE algorithm
+#merge_results <- rfe(merged[,2:178], merged[,1], sizes=c(1:20), rfeControl=control)
+# summarize results
+#print(merge_results)
+# print selected features
+#predictors(merge_results)
+# plot results
+#plot(merge_results, type=c("g", "o"))
+```
+
+## PTSD Model Preparation
+```{r}
+# split into training and testing
+train_size <- floor(0.8 * nrow(merged))
+set.seed(543)
+train_pos <- sample(seq_len(nrow(merged)), size = train_size)
+
+train <- merged[train_pos, ]
+test <- merged[-train_pos, ]
+
+dim(train)
+dim(test)
+```
+
+##### Radial SVM
+```{r}
+# train radial SVM
+set.seed(30495)
+
+# classification problem
+train$PTSD <- as.factor(train$PTSD)
+# correct error "at least one of the class levels is not a valid R variable name"
+train$PTSD <- make.names(train$PTSD)
+
+ctrl <- trainControl(method = "repeatedcv", repeats = 5,classProbs = T, savePredictions = T)
+svm_rad_full <- train(PTSD ~ ., data = train, method = "svmRadial", tuneLength = 10, trControl = ctrl, scale = FALSE)
+```
+
+```{r}
+svm_rad_full
+```
+
+```{r}
+plot(x = roc(predictor = svm_rad_full$pred$X1, response = svm_rad_full$pred$obs)$specificities, y = roc(predictor = svm_rad_full$pred$X1, response = svm_rad_full$pred$obs)$sensitivities, col= "darkpurple", xlim = c(1, 0), type ="l", ylab = "Sensitivity", xlab = "Specificity", main = "Radial SVM: Merged Dataset")
+legend("bottomright", legend = paste("AUC: ", roc(predictor = svm_rad_full$pred$X1, response = svm_rad_full$pred$obs)$auc
+, sep = ""), col = c("purple"), fill = c("purple"))
+```
+
+```{r}
+# predict using test set
+# classification problem
+test$PTSD <- as.factor(test$PTSD)
+# correct error "at least one of the class levels is not a valid R variable name"
+test$PTSD <- make.names(test$PTSD)
+
+# accuracy is 
+svm_test_rad_full <- predict(svm_rad_full, newdata = test)
+
+# confusion matrix
+x <- union(svm_test_rad_full, test$PTSD)
+y <- table(factor(svm_test_rad_full, x), factor(test$PTSD, x))
+confusionMatrix(y)
+```
+
+##### Radial SVM with 14 Feature Selected Variables
+```{r}
+# feature selected variables
+train_select_full <- subset(train, select=c(PTSD, sad, i, negemo, AU12_c, insight, posemo, focuspast, AU12_r, AU05_r, AU09_r, feel, we, interrog, AU25_c))
+
+as.tibble(train_select_full)
+```
+
+```{r}
+# see how variables are related to one another
+pairs.panels(train_select_full, col='red')
+```
+```{r}
+# train radial SVM
+set.seed(30495)
+
+# classification problem
+train_select_full$PTSD <- as.factor(train_select_full$PTSD)
+# correct error "at least one of the class levels is not a valid R variable name"
+train_select_full$PTSD <- make.names(train_select_full$PTSD)
+
+ctrl <- trainControl(method = "repeatedcv", repeats = 5,classProbs = T, savePredictions = T)
+svm_rad_select_full <- train(PTSD ~ ., data = train_select_full, method = "svmRadial", tuneLength = 10, trControl = ctrl, scale = TRUE)
+```
+
+```{r}
+svm_rad_select_full
+```
+
+```{r}
+# AUC is 0.808
+plot(x = roc(predictor = svm_rad_select_full$pred$X1, response = svm_rad_select_full$pred$obs)$specificities, y = roc(predictor = svm_rad_select_full$pred$X1, response = svm_rad_select_full$pred$obs)$sensitivities, col= "purple", xlim = c(1, 0), type ="l", ylab = "Sensitivity", xlab = "Specificity", main = "Radial SVM with 14 Feature Selected Variables for Merged Data")
+legend("bottomright", legend = paste("AUC: ", roc(predictor = svm_rad_select_full$pred$X1, response = svm_rad_select_full$pred$obs)$auc
+, sep = ""), col = c("purple"), fill = c("purple"))
+```
+
+```{r}
+# feature selected variables
+test_select_full <- subset(test, select=c(PTSD, sad, i, negemo, AU12_c, insight, posemo, focuspast, AU12_r, AU05_r, AU09_r, feel, we, interrog, AU25_c))
+
+as.tibble(test_select_full)
+```
+
+```{r}
+# predict using test set
+# classification problem
+test_select_full$PTSD <- as.factor(test_select_full$PTSD)
+# correct error "at least one of the class levels is not a valid R variable name"
+test_select_full$PTSD <- make.names(test_select_full$PTSD)
+
+# accuracy is 0.6667
+svm_rad_select_full_test <- predict(svm_rad_select_full, newdata = test_select_full)
+
+confusionMatrix(table(svm_rad_select_full_test, reference = test_select_full$PTSD))
+```
+
+```{r}
+roc(predictor = svm_rad_select_full_test$pred$X1, response = svm_rad_select_full_test$pred$obs)$auc
+```
+
+
+##### Radial SVM with 5 Feature Selected Variables
+```{r}
+# feature selected variables
+train_5 <- subset(train, select=c(PTSD, sad, i, negemo, focuspast, feel))
+
+as.tibble(train_5)
+```
+
+```{r}
+# see how variables are related to one another
+pairs.panels(train_5, col='red')
+```
+```{r}
+# train radial SVM
+set.seed(30495)
+
+# classification problem
+train_5$PTSD <- as.factor(train_5$PTSD)
+# correct error "at least one of the class levels is not a valid R variable name"
+train_5$PTSD <- make.names(train_5$PTSD)
+
+ctrl <- trainControl(method = "repeatedcv", repeats = 5,classProbs = T, savePredictions = T)
+svm_5 <- train(PTSD ~ ., data = train_5, method = "svmRadial", tuneLength = 10, trControl = ctrl, scale = TRUE)
+```
+
+```{r}
+svm_5
+```
+
+```{r}
+# 0.582
+plot(x = roc(predictor = svm_5$pred$X1, response = svm_5$pred$obs)$specificities, y = roc(predictor = svm_5$pred$X1, response = svm_5$pred$obs)$sensitivities, col= "blue", xlim = c(1, 0), type ="l", ylab = "Sensitivity", xlab = "Specificity", main = "Radial SVM with 5 Feature Selected Variables for Merged Data")
+legend("bottomright", legend = paste("AUC: ", roc(predictor = svm_5$pred$X1, response = svm_5$pred$obs)$auc
+, sep = ""), col = c("blue"), fill = c("blue"))
+```
+
+```{r}
+# feature selected variables
+test_5 <- subset(test, select=c(PTSD, sad, i, negemo, focuspast, feel))
+
+as.tibble(test_5)
+```
+
+```{r}
+# predict using test set
+# classification problem
+test_5$PTSD <- as.factor(test_5$PTSD)
+# correct error "at least one of the class levels is not a valid R variable name"
+test_5$PTSD <- make.names(test_5$PTSD)
+
+# accuracy is 0.6667
+svm_5 <- predict(svm_5, newdata = test_5)
+
+confusionMatrix(table(svm_5, reference = test_5$PTSD))
+```
+
+
+
+#### Emily Section
+```{r}
+library(tidyverse)
+# feature selected variables
+train_select_full <- subset(train, select=c(PTSD, sad, i, negemo, AU12_c, insight, posemo, focuspast, AU12_r, AU05_r, AU09_r, feel, we, interrog, AU25_c))
+
+test_select_full <- subset(test, select=c(PTSD, sad, i, negemo, AU12_c, insight, posemo, focuspast, AU12_r, AU05_r, AU09_r, feel, we, interrog, AU25_c))
+
+as.tibble(train_select_full)
+as.tibble(test_select_full)
+```
+
+```{r}
+# train radial SVM
+set.seed(30495)
+
+# classification problem
+train_select_full$PTSD <- as.factor(train_select_full$PTSD)
+# correct error "at least one of the class levels is not a valid R variable name"
+train_select_full$PTSD <- make.names(train_select_full$PTSD)
+
+test_select_full$PTSD <- make.names(test_select_full$PTSD)
+
+ctrl <- trainControl(method = "repeatedcv", repeats = 5,classProbs = T, savePredictions = T)
+svm_rad_select_full <- train(PTSD ~ ., data = train_select_full, method = "svmRadial", tuneLength = 10, trControl = ctrl, scale = TRUE)
+```
+
+```{r}
+# 0.808
+plot(x = roc(predictor = svm_rad_select_full$pred$X1, response = svm_rad_select_full$pred$obs)$specificities, y = roc(predictor = svm_rad_select_full$pred$X1, response = svm_rad_select_full$pred$obs)$sensitivities, col= "blue", xlim = c(1, 0), type ="l", ylab = "Sensitivity", xlab = "Specificity", main = "Radial SVM with 14 Feature Selected Variables for Merged Data")
+legend("bottomright", legend = paste("AUC: ", roc(predictor = svm_rad_select_full$pred$X1, response = svm_rad_select_full$pred$obs)$auc
+, sep = ""), col = c("blue"), fill = c("blue"))
+```
+
+```{r}
+library(ROCR)
+pred_svmr <- predict(svm_rad_select_full, newdata=test_select_full)
+predicts_svm <- as.numeric(pred_svmr)
+prediction_svm <- prediction(predicts_svm, test_select_full$PTSD)
+perf_svm <- performance(prediction_svm , 'tpr','fpr')
+plot(perf_svm, colorize=TRUE)
+abline(a=0, b= 1)
+# ROCRpred_glmnet <- prediction(predicts_glmnet, test_all$PTSD)
+# RP.perf <- performance(pred, "prec", "rec");
+auc.tmp <- performance(prediction_svm,"auc")
+auc <- as.numeric(auc.tmp@y.values)
+auc
+f1.tmp <- performance(prediction_svm,"f")
+f1 <- as.numeric(auc.tmp@y.values)
+f1
+```
+
+```{r}
+plot(perf_svm, main = "Radidal SVM Test Accuracy")
+legend("bottomright", legend = paste("AUC: ", auc), col = c("blue"), fill = c("blue"))
+abline(a=0, b= 1)
+```
+
+
+### SVM Radial
+```{r RFE Radial SVM Model}
+ctrl <- trainControl(method = "repeatedcv", repeats = 5,classProbs = T, savePredictions = T)
+svm_rad <- train(PTSD ~ ., data = train, method = "svmRadial", tuneLength = 10, trControl = ctrl)
+svmr_test <- predict(svm_rad, newdata = test)
+svmr_test
+```
+
+
+```{r}
+test$PTSD <- as.numeric(test$PTSD)
+svm_rad1 <- roc(test$PTSD, svmr_test, smooth = TRUE)
+svm_rad1
+```
+
+```{r}
+plot(svm_rad1, asp = NA, legacy.axes = TRUE, grid=TRUE, col = "#70358a", main = "Radial SVM: Merged Dataset", ylab = "Sensitivity", xlab = "Specificity")
+legend("bottomright", legend=c("AUC = 0.559"), col=c("#70358a"), lwd = 2, cex=0.8)
+```
+

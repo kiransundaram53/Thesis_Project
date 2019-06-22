@@ -1,0 +1,146 @@
+---
+title: "Final Graphs"
+author: "Kiran Sundaram"
+date: "6/8/2019"
+output: html_document
+---
+
+```{r, include=FALSE} 
+# load necessary libraries
+library(dplyr)
+library(tidyverse)
+library(broom)
+library(ggplot2)
+library(ggfortify)
+library(caret)
+library(cluster)
+library(pROC)
+library(grid)
+library(gridExtra)
+library(Hmisc)
+library(psych)
+library(car)
+library(randomForest)
+library(tree)
+library(gbm)
+library(ROCR)
+library(survival)
+library(PresenceAbsence)
+library(class)
+```
+
+## Read In Data
+```{r}
+# read in previously cleaned train and test data frame
+mytrain <- read.csv(file="mytrain.csv", header=TRUE, sep=",")
+mytest <- read.csv(file="mytest.csv", header=TRUE, sep=",")
+```
+
+### PTSD Model Preparation
+```{r}
+# remove other psych diagnoses
+ptsd_train <- dplyr::select(mytrain, -asd_1m,
+                            -k6_1m, 
+                            -scl_dep_1m,
+                            -scl_som_1m,
+                            -scl_anx_1m,
+                            -psqi_global_1m,
+                            -AUD_HNR_MIN)
+ptsd_test <- dplyr::select(mytest, -asd_1m,
+                            -k6_1m, 
+                            -scl_dep_1m,
+                            -scl_som_1m,
+                            -scl_anx_1m,
+                            -psqi_global_1m,
+                            -AUD_HNR_MIN)
+
+as.tibble(ptsd_train)
+```
+
+### PTSD Logistic Regression
+```{r}
+glmModel <- glm(pcl_1m_cutoff ~ ., data=ptsd_train, family=binomial())
+```
+
+```{r}
+pred.glmModel <- predict(glmModel, newdata=ptsd_test, type="response")
+pr <- prediction(pred.glmModel, ptsd_test$pcl_1m_cutoff)
+perf<- performance(pr, measure = "tpr", x.measure = "fpr")
+```
+
+
+```{r}
+lr_plot <- roc(ptsd_test$pcl_1m_cutoff, pred.glmModel, smooth = TRUE)
+lr_plot
+```
+
+### SVM Radial
+```{r RFE Radial SVM Model}
+ctrl <- trainControl(method = "repeatedcv", repeats = 5,classProbs = T, savePredictions = T)
+svm_rad <- train(pcl_1m_cutoff ~ ., data = ptsd_train, method = "svmRadial", tuneLength = 10, trControl = ctrl)
+svmr_test <- predict(svm_rad, newdata = ptsd_test)
+```
+
+```{r}
+svm_rad <- roc(ptsd_test$pcl_1m_cutoff, svmr_test, smooth = TRUE)
+svm_rad
+```
+
+```{r RFE Linear SVM Model}
+ctrl <- trainControl(method = "repeatedcv", repeats = 5,classProbs = T, savePredictions = T)
+svm <- train(pcl_1m_cutoff ~., data = ptsd_train, method = "svmLinear", tuneLength = 10, trControl = ctrl)
+
+svm_test <- predict(svm, newdata = ptsd_test)
+
+```
+
+```{r}
+svm <- roc(ptsd_test$pcl_1m_cutoff, svm_test, smooth = TRUE)
+svm
+```
+
+```{r RFE Random Forest Model}
+RF_classification <- randomForest(pcl_1m_cutoff ~ ., data=ptsd_train,  importance = TRUE, oob.times = 15, confusion = TRUE)
+
+test_RF_classification <- predict(RF_classification , newdata = ptsd_test)
+```
+```{r}
+rf <- roc(ptsd_test$pcl_1m_cutoff, test_RF_classification, smooth = TRUE)
+rf
+```
+
+
+```{r}
+knn_data <- dplyr::select(ptsd_train, -study_id)
+knn_test <- dplyr::select(ptsd_test, -study_id)
+as.tibble(knn_data)
+as.tibble(knn_test)
+prc_train_labels <- knn_data[,1]
+as.tibble(prc_train_labels)
+prc_test_pred <- knn(train = knn_data, test = knn_test ,cl = prc_train_labels, k=10)
+prc_test_pred <- as.numeric(prc_test_pred)
+```
+
+```{r}
+knn <- roc(ptsd_test$pcl_1m_cutoff, prc_test_pred)
+knn
+```
+
+
+# All ROC plot
+```{r}
+#ALL Variables
+
+# For the plot -- for each model make a "roc object" with roc() if you get the error "Not smoothable" change smooth = TRUE to smooth.n = TRUE. It wasn't letting me add the AUC variables to the legend so I wrote them down and manually put them into the legend (see below)
+
+plot(rf, asp = NA, legacy.axes = TRUE, grid=TRUE, col = "gold", main = "ROC for PTSD Prediction: All Acoustic Features", ylab = "Sensitivity", xlab = "Specificity")
+plot(lr_plot, add = TRUE, col = "dodgerblue")
+plot(svm, add=TRUE, col = "darkorchid")
+plot(svm_rad,  add=TRUE, col = "firebrick")
+plot(knn, add=TRUE, col = "forestgreen")
+legend("bottomright", legend=c("Random Forest; AUC = 0.671", "Logistic Regression; AUC = 0.512","Linear SVM; AUC = 0.529", "Radial SVM; AUC = 0.526", "KNN; AUC = 0.500 "), col=c("gold", "dodgerblue", "darkorchid", "firebrick", "forestgreen"), lwd=2, cex=0.8)
+```
+
+
+
+

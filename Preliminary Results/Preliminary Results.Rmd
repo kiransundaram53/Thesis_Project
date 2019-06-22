@@ -1,0 +1,309 @@
+---
+title: "Preliminary Results"
+author: "Kiran Sundaram"
+date: "4/1/2019"
+output: html_document
+---
+
+```{r, include=FALSE} 
+# load necessary libraries
+library(dplyr)
+library(tidyverse)
+library(ggplot2)
+library(ggfortify)
+library(caret)
+library(cluster)
+library(pROC)
+library(grid)
+library(gridExtra)
+library(InformationValue)
+library(glmnet)
+```
+
+### Tidying Data
+```{r}
+# read in full data frame
+# this is the edited race column dataset
+BFD <- read.csv(file="Bellevue_final_data.csv", header=TRUE, sep=",")
+```
+
+```{r}
+# remove unecessary channel columns
+# keep demographic variables
+# keep psych diagnosis variables
+# keep audio variables
+audio <-  BFD %>%
+      select('study_id','pcl_1m_cutoff','Sex','SelfReport_Age','Hispanic','Race','suds_1m','asd_1m','cds_1m',
+             'cesd_1m','k6_1m','lss_1m','pact_forwardfocusraw_1m','pact_traumafocusraw_1m','pact_flex1raw_1m',
+             'pact_flex2raw_1m','panas_positive','panas_negativepcl5_1m','scl_total_1m_23','scl_anx_1m_23',
+             'scl_dep_1m','scl_phob_1m','scl_som_1m','scl_total_1m','scl_anx_1m','psqi_global_1m',
+             'TOT_FRAME','AUD_INTENSITY_FRAMES','AUD_INTENSITY_MEAN','AUD_INTENSITY_MIN','AUD_INTENSITY_MAX',
+             'AUD_FF_FRAMES','AUD_FF_MEAN','AUD_FF_MIN','AUD_FF_MAX','AUD_HNR_FRAMES','AUD_HNR_MEAN',
+             'AUD_HNR_MIN','AUD_HNR_MAX','AUD_GNE_FRAMES','AUD_GNE_MEAN','AUD_GNE_MIN','AUD_GNE_MAX',
+             'VOICE_FRAME_COUNT','VFS_TOTAL_COUNT','VFS_PERCT')
+```
+
+```{r}
+# elected to remove the 5 NA PTSD patients
+audio <- audio[!is.na(audio$pcl_1m_cutoff), ]
+audio$pcl_1m_cutoff <- as.factor(audio$pcl_1m_cutoff)
+audio$Sex <- as.factor(audio$Sex)
+audio$Hispanic <- as.factor(audio$Hispanic)
+as.tibble(audio)
+```
+
+### Exploratory Data Analysis
+```{r}
+# mean fundamental frequency boxplot
+bp1 <- ggplot(audio, aes(x=pcl_1m_cutoff, y=AUD_FF_MEAN, fill = pcl_1m_cutoff)) + 
+  geom_boxplot() +
+  labs(title ="PTSD vs Mean Fundamental Frequency", x = "PTSD", y = "Mean FF") +
+  guides(fill=guide_legend(title="PTSD")) +
+  theme(plot.title = element_text(hjust = 0.5, size = 9), axis.title.x = element_text(size = 7), axis.title.y = element_text(size = 7), legend.title = element_text(size = 7)) +
+  scale_fill_brewer(palette = 'Pastel1')
+```
+
+```{r}
+# mean intensity boxplot
+bp2 <- ggplot(audio, aes(x=pcl_1m_cutoff, y=AUD_INTENSITY_MEAN, fill = pcl_1m_cutoff)) + 
+  geom_boxplot() +
+  labs(title ="PTSD vs Mean Intensity", x = "PTSD", y = "Mean Intensity") +
+  guides(fill=guide_legend(title="PTSD")) +
+  theme(plot.title = element_text(hjust = 0.5, size = 9), axis.title.x = element_text(size = 7), axis.title.y = element_text(size = 7), legend.title = element_text(size = 7)) +
+  scale_fill_brewer(palette = 'Pastel1')
+```
+
+```{r}
+# mean HNR boxplot
+bp3 <- ggplot(audio, aes(x=pcl_1m_cutoff, y=AUD_HNR_MEAN, fill = pcl_1m_cutoff)) + 
+  geom_boxplot() +
+  labs(title ="PTSD vs Mean Harmonics to Noise Ratio", x = "PTSD", y = "Mean HNR") +
+  guides(fill=guide_legend(title="PTSD")) +
+  theme(plot.title = element_text(hjust = 0.5, size = 9), axis.title.x = element_text(size = 7), axis.title.y = element_text(size = 7), legend.title = element_text(size = 7)) +
+  scale_fill_brewer(palette = 'Pastel1')
+```
+
+```{r}
+# mean GNE boxplot
+bp4 <- ggplot(audio, aes(x=pcl_1m_cutoff, y=AUD_GNE_MEAN, fill = pcl_1m_cutoff)) + 
+  geom_boxplot() +
+  labs(title ="PTSD vs Mean Glottal to Noise Energy", x = "PTSD", y = "Mean GNE") +
+  guides(fill=guide_legend(title="PTSD")) +
+  theme(plot.title = element_text(hjust = 0.5, size = 9), axis.title.x = element_text(size = 7), axis.title.y = element_text(size = 7), legend.title = element_text(size = 7)) +
+  scale_fill_brewer(palette = 'Pastel1')
+```
+
+```{r}
+# plot audio features graphs on one graph
+grid.arrange(bp1, bp2, bp3, bp4, nrow = 2, top = 'Comparing PTSD Presence to Audio Features')
+```
+
+```{r}
+# age boxplot
+bp5 <- ggplot(audio, aes(x=pcl_1m_cutoff, y=SelfReport_Age, fill = pcl_1m_cutoff)) + 
+  geom_boxplot() +
+  labs(title ="PTSD vs Age", x = "PTSD", y = "Age") +
+  guides(fill=guide_legend(title="PTSD")) +
+  theme(plot.title = element_text(hjust = 0.5, size = 9), axis.title.x = element_text(size = 7), axis.title.y = element_text(size = 7), legend.title = element_text(size = 7)) +
+  scale_fill_brewer(palette = 'Pastel1')
+```
+
+```{r}
+# create df for a clustered Sex bar graph
+df_bp6 <- audio %>%
+  filter(Sex %in% c("0", "1")) %>%
+  group_by(pcl_1m_cutoff, Sex) %>%
+  summarise(counts = n()) 
+# rename sex column
+df_bp6$Sex <- ifelse(df_bp6$Sex == '0', 'Female', 
+                     ifelse(df_bp6$Sex == '1', 'Male', NA))
+# change sex column to a factor
+df_bp6$Sex <- as.factor(df_bp6$Sex)
+head(df_bp6, 4)
+```
+
+```{r}
+# sex boxplot
+bp6 <- ggplot(df_bp6, aes(x=pcl_1m_cutoff, y = counts)) + 
+  geom_bar(aes(fill = Sex), 
+           stat = "identity", position = position_dodge(0.7), width = 0.7) +
+  labs(title ="PTSD vs Sex", x = "PTSD", y = "Counts") +
+  guides(fill=guide_legend(title="Gender")) +
+  theme(plot.title = element_text(hjust = 0.5, size = 9), axis.title.x = element_text(size = 7), axis.title.y = element_text(size = 7), legend.title = element_text(size = 7)) +
+  scale_fill_brewer(palette = 'Pastel1')
+```
+
+```{r}
+# plot demographic features graphs on one graph
+grid.arrange(bp5, bp6, nrow = 1, top = 'Comparing PTSD Presence to Demographic Features')
+```
+
+### PTSD Model Preparation
+```{r}
+# remove other psych diagnoses
+audio_ptsd <- dplyr::select(audio, -study_id,
+                            -suds_1m,
+                            -asd_1m, 
+                            -cds_1m,
+                            -cesd_1m,
+                            -k6_1m,
+                            -lss_1m,
+                            -pact_forwardfocusraw_1m,
+                            -pact_traumafocusraw_1m,
+                            -pact_flex1raw_1m,
+                            -pact_flex2raw_1m,
+                            -panas_positive,
+                            -panas_negativepcl5_1m,
+                            -scl_total_1m_23,
+                            -scl_anx_1m_23,
+                            -scl_dep_1m,
+                            -scl_phob_1m,
+                            -scl_som_1m,
+                            -scl_total_1m,
+                            -scl_anx_1m,
+                            -psqi_global_1m)
+```
+
+```{r}
+# adjust levels for pcl_1m_cutoff to run in model
+levels(audio_ptsd$pcl_1m_cutoff) <- c("No_PTSD", "PTSD")
+```
+
+```{r}
+as.tibble(audio_ptsd)
+```
+
+### Logistic Regression
+##### General Logistic Model, 15-fold CV
+```{r}
+# split into train and test 
+train_size <- floor(0.7 * nrow(audio_ptsd))
+train_size
+
+# set seed
+set.seed(1234)
+train_pos <- sample(seq_len(nrow(audio_ptsd)), size = train_size)
+
+# define training and the test set
+training <- audio_ptsd[train_pos, ]
+test <- audio_ptsd[-train_pos, ]
+
+dim(training)
+dim(test)
+```
+
+```{r}
+# define train function
+# cross validation 10
+ctrl <- trainControl(method = "repeatedcv", number = 15, savePredictions = TRUE)
+```
+
+```{r}
+# look at patients with/without PTSD
+training_log <- training[c(which(training$pcl_1m_cutoff == "PTSD"), which(training$pcl_1m_cutoff == "No_PTSD")),]
+test_classifier_log <- test[c(which(test$pcl_1m_cutoff == "PTSD"), which(test$pcl_1m_cutoff == "No_PTSD")),]
+# train against all variables
+logistic_regression <- train(pcl_1m_cutoff ~ ., data = training_log , method = "glm", family = "binomial", trControl = ctrl)
+logistic_regression
+```
+
+```{r}
+summary(logistic_regression)
+```
+
+```{r}
+# ROC curve
+plot(x = roc(predictor = logistic_regression$pred$PTSD, 
+             response = logistic_regression$pred$obs)$specificities, 
+     y = roc(predictor = logistic_regression$pred$PTSD, 
+             response = logistic_regression$pred$obs)$sensitivities, 
+     col= "red", xlim = c(1, 0), type ="l", ylab = "Sensitivity", 
+     xlab = "Specificity", main = "PTSD Logistic Regression")
+# legend
+legend("bottomright", legend = paste("AUC: ", 
+      roc(predictor = logistic_regression$pred$PTSD, 
+      response = logistic_regression$pred$obs)$auc, 
+      sep = ""))
+```
+
+##### General Logistic Model with UpSampled Data, 15-fold CV
+```{r}
+# upSample data
+audio_up <- upSample(audio_ptsd, audio_ptsd$pcl_1m_cutoff)
+```
+
+```{r}
+# split into train and test 
+train_size <- floor(0.7 * nrow(audio_up))
+train_size
+
+# set seed
+set.seed(1234)
+train_pos <- sample(seq_len(nrow(audio_up)), size = train_size)
+
+# define training and the test set
+training <- audio_ptsd[train_pos, ]
+test <- audio_ptsd[-train_pos, ]
+
+dim(training)
+dim(test)
+```
+
+```{r}
+# define train function
+ctrl <- trainControl(method = "repeatedcv", number = 15, savePredictions = TRUE)
+```
+
+```{r}
+# look at patients with/without PTSD
+training_log <- training[c(which(training$pcl_1m_cutoff == "PTSD"), which(training$pcl_1m_cutoff == "No_PTSD")),]
+test_classifier_log <- test[c(which(test$pcl_1m_cutoff == "PTSD"), which(test$pcl_1m_cutoff == "No_PTSD")),]
+# train against all variables
+logistic_regression_up <- train(pcl_1m_cutoff ~ ., data = training_log , method = "glm", family = "binomial", trControl = ctrl)
+logistic_regression_up
+```
+
+```{r}
+summary(logistic_regression_up)
+```
+
+```{r}
+pred <- predict(logistic_regression_up, newdata=test)
+```
+
+
+```{r}
+# ROC curve
+plot(x = roc(predictor = logistic_regression_up$pred$PTSD, 
+             response = logistic_regression_up$pred$obs)$specificities, 
+     y = roc(predictor = logistic_regression_up$pred$PTSD, 
+             response = logistic_regression_up$pred$obs)$sensitivities, 
+     col= "red", xlim = c(1, 0), type ="l", ylab = "Sensitivity", 
+     xlab = "Specificity", main = "PTSD Logistic Regression")
+# legend
+legend("bottomright", legend = paste("AUC: ", 
+      roc(predictor = logistic_regression_up$pred$PTSD, 
+      response = logistic_regression_up$pred$obs)$auc, 
+      sep = ""))
+```
+
+##### Logistic Model with 10-fold Cross Validation
+
+
+
+##### Logistic Model with Leave One Out Cross Validation
+
+```{r}
+# define the control using a random forest selection function
+control <- rfeControl(functions=rfFuncs, method="cv", number=10)
+# run the RFE algorithm
+results <- rfe(audio_ptsd[,1:24], PimaIndiansDiabetes[,1], sizes=c(1:24), rfeControl=control)
+# summarize the results
+print(results)
+# list the chosen features
+predictors(results)
+# plot the results
+plot(results, type=c("g", "o"))
+```
+```
+
